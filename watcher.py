@@ -155,12 +155,20 @@ def reddit_posts() -> list[dict]:
         except Exception as e:
             errors.append(f"{urllib.parse.urlsplit(url).netloc}{urllib.parse.urlsplit(url).path}: {e}")
             continue
+        label = f"{urllib.parse.urlsplit(url).netloc}{urllib.parse.urlsplit(url).path}"
+        if body.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
+            errors.append(f"{label}: got an HTML page, not a feed (likely Reddit's block page)")
+            continue
         if url.endswith("raw_json=1") or b'"kind"' in body[:50]:
             return [{"id": "reddit:" + c["data"]["id"], "title": c["data"]["title"],
                      "url": c["data"].get("url_overridden_by_dest") or c["data"]["url"],
                      "thread": "https://www.reddit.com" + c["data"]["permalink"], "expired": False}
                     for c in json.loads(body)["data"]["children"]]
-        root = ET.fromstring(body)
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as e:
+            errors.append(f"{label}: unparseable response ({e}): {body[:80]!r}")
+            continue
         ns = {"a": "http://www.w3.org/2005/Atom"}
         out = []
         for e in root.findall("a:entry", ns):
