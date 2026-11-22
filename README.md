@@ -1,0 +1,56 @@
+# GPU deal watcher (through Cyber Monday)
+
+Every 10 minutes it checks r/buildapcsales, Best Buy, and Slickdeals.
+It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
+It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone with ntfy.
+
+## Setup (about 15 minutes)
+
+1. **ntfy:** install the ntfy app (iOS or Android) and subscribe to a long, random topic, e.g. `gpu-7f3k9q2x-deals`.
+   Anyone who knows the topic name can read it, so don't use a guessable name.
+2. **Repo:** create a new **public** GitHub repo (public repos get free, unlimited Actions minutes).
+   Push `watcher.py` and `.github/workflows/watch.yml` to it.
+3. **Secrets** (Settings → Secrets and variables → Actions):
+   - `NTFY_TOPIC` (required)
+   - `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` (strongly recommended).
+     Create a "script" app at https://www.reddit.com/prefs/apps.
+     Without them, the watcher falls back to Reddit's public RSS, which Reddit often blocks from GitHub's servers.
+     Reddit may also require you to request API access first; if it does, use the Slickdeals fallbacks below.
+   - `BESTBUY_API_KEY` (optional, free at https://developer.bestbuy.com, approval can take about a day)
+   - Optional variable `TAX_RATE`, e.g. `0.0825`, so the ceilings include sales tax.
+4. Go to Actions → gpu-deal-watcher → **Run workflow** once.
+   The first run quietly records what's already posted, so you won't get a flood of old deals.
+   Check the log: each source should report `N items`.
+5. **Test the push:** `curl -d "test" ntfy.sh/<your-topic>`
+6. **After Nov 30:** disable the workflow (Actions → ⋯ → Disable).
+
+If a source fails 3 runs in a row, you get one warning push per day.
+That way you know the watcher has a blind spot instead of assuming it's quiet.
+
+## Tuning
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `MAX_5080` | 1500 | max price to alert on (5080s sell for ~$2,199+ as of Nov 2026) |
+| `MAX_5090` | 1500 | effectively never fires; kept in case of a pricing error |
+| `MAX_4080S` | 1200 | only if new old stock shows up |
+| `MAX_5070TI` | 1300 | it's at ~$1,340-1,480 now; $1,300 or less is a real drop |
+| `MAX_5070` | 800 | above this, a 5070 Ti is the better buy |
+| `MAX_LENGTH_MM` | 350 | max card length to alert on; set to your case clearance |
+
+The card lengths in `LENGTHS_MM` are approximate per product line.
+Always check the spec sheet. Unknown models still alert, marked "length unknown".
+
+## What it can't monitor reliably (and what to use instead)
+
+| Source | Status | Alternative |
+|---|---|---|
+| Amazon | Blocks scraping (bot checks) | Keepa or camelcamelcamel price-drop alerts on 2–3 specific listings |
+| Newegg | Blocks bots (Akamai) | Usually covered by r/buildapcsales within minutes; Newegg's own price alerts also work |
+| Walmart | Blocks bots (PerimeterX) | Covered by r/buildapcsales and Slickdeals |
+| Micro Center | No API, in-store pricing | Check the weekly ad and the Black Friday page manually on Nov 26–27 |
+| B&H | Blocks bots | Covered by r/buildapcsales |
+| Slickdeals | RSS usually works, best effort | The Slickdeals app's "Deal Alerts" for "5070 Ti" is a zero-code backup |
+
+`python watcher.py --self-test` runs the filter tests.
+`python watcher.py --dry-run` prints alerts instead of pushing them.
