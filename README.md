@@ -1,6 +1,6 @@
 # GPU deal watcher (through Cyber Monday)
 
-Every 10 minutes it checks r/buildapcsales, Best Buy, and Slickdeals.
+Every 10 minutes it checks r/buildapcsales and Slickdeals.
 It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
 It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone via a Discord webhook and/or ntfy.
 
@@ -21,7 +21,6 @@ It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone v
      Without them, the watcher falls back to Reddit's public RSS, which Reddit often blocks from GitHub's servers.
      Reddit may also require you to request API access first; if it does, use the Slickdeals fallbacks below.
    - `REDDIT_USERNAME` (optional, e.g. `yourname` without `/u/`). Reddit's API rules ask for it in the User-Agent; it's only sent to Reddit.
-   - `BESTBUY_API_KEY` (optional, free at https://developer.bestbuy.com, approval can take about a day)
    - `TAX_RATE` (optional **secret**, e.g. `0.0825`) so the ceilings include sales tax. Use a secret, not a variable: variable values show up in public run logs.
 4. Go to Actions → gpu-deal-watcher → **Run workflow** once.
    The first run quietly records what's already posted, so you won't get a flood of old deals.
@@ -52,12 +51,14 @@ Always check the spec sheet. Unknown models still alert, marked "length unknown"
 
 | Source | Status | Alternative |
 |---|---|---|
+| r/buildapcsales | Public feeds block GitHub's servers (404/403); works only with approved Reddit API keys | MonitoRSS Discord bot (may be blocked too); Slickdeals usually picks up the same deals |
+| Best Buy | API keys aren't issued to free or .edu email addresses | Covered by Slickdeals; save the cards you want in the Best Buy app |
 | Amazon | Blocks scraping (bot checks) | Keepa or camelcamelcamel price-drop alerts on 2–3 specific listings |
-| Newegg | Blocks bots (Akamai) | Usually covered by r/buildapcsales within minutes; Newegg's own price alerts also work |
-| Walmart | Blocks bots (PerimeterX) | Covered by r/buildapcsales and Slickdeals |
+| Newegg | Blocks bots (Akamai) | Covered by Slickdeals; Newegg's own price alerts also work |
+| Walmart | Blocks bots (PerimeterX) | Covered by Slickdeals |
 | Micro Center | No API, in-store pricing | Check the weekly ad and the Black Friday page manually on Nov 26–27 |
-| B&H | Blocks bots | Covered by r/buildapcsales |
-| Slickdeals | RSS usually works, best effort | The Slickdeals app's "Deal Alerts" for "5070 Ti" is a zero-code backup |
+| B&H | Blocks bots | Covered by Slickdeals |
+| Slickdeals | Works (search RSS) | The Slickdeals app's "Deal Alerts" for "RTX 5070 Ti" and "RTX 5080" is a zero-code backup |
 
 `python watcher.py --self-test` runs the filter tests.
 `python watcher.py --dry-run` prints alerts instead of pushing them.

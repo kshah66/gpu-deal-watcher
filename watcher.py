@@ -3,7 +3,6 @@
 
 Sources (each one optional, failures are reported, never faked):
   * r/buildapcsales  - Reddit OAuth API if REDDIT_CLIENT_ID/SECRET set, else public RSS
-  * Best Buy         - official Products API (Nvidia queries only) if BESTBUY_API_KEY set
   * Slickdeals       - public search RSS (best effort)
 
 Filters: target card, per-card price ceiling (optionally + sales tax),
@@ -104,7 +103,7 @@ def card_length(title: str) -> int | None:
     return None
 
 
-def evaluate(title: str, price: float | None, length_mm: int | None = None) -> tuple[bool, str, dict]:
+def evaluate(title: str, price: float | None) -> tuple[bool, str, dict]:
     """Return (alert?, reason, info)."""
     if EXCLUDE.search(title):
         return False, "excluded (used/open-box/system/laptop)", {}
@@ -119,7 +118,7 @@ def evaluate(title: str, price: float | None, length_mm: int | None = None) -> t
     ceiling = CARDS[card]["max"]
     if total > ceiling:
         return False, f"{card} ${total:,.0f} > ${ceiling:,.0f}", {"card": card}
-    length = length_mm or card_length(title)
+    length = card_length(title)
     if length and length > MAX_LENGTH_MM:
         return False, f"too long ({length}mm)", {"card": card}
     return True, "match", {"card": card, "price": price, "total": total, "length": length}
@@ -180,32 +179,6 @@ def reddit_posts() -> list[dict]:
     raise RuntimeError("all public Reddit endpoints failed: " + " | ".join(errors))
 
 
-def bestbuy_products() -> list[dict]:
-    key = os.environ.get("BESTBUY_API_KEY")
-    if not key:
-        return []
-    out = []
-    for q in ("search=rtx&search=5070", "search=rtx&search=5080", "search=rtx&search=5090", "search=rtx&search=4080"):
-        url = (f"https://api.bestbuy.com/v1/products(({q})&categoryPath.id=abcat0507002&condition=new)"
-               f"?apiKey={key}&format=json&pageSize=100"
-               "&show=sku,name,salePrice,regularPrice,url,onlineAvailability,depth,width,height")
-        data = json.loads(http(url))
-        for p in data.get("products", []):
-            if not p.get("onlineAvailability"):
-                continue
-            out.append({"id": f"bestbuy:{p['sku']}:{p['salePrice']}",   # re-alert on new price
-                        "title": f"{p['name']} (${p['salePrice']})", "price": p["salePrice"],
-                        "url": p["url"], "thread": p["url"], "expired": False,
-                        "length_mm": _inches_to_mm(p.get("depth")) or _inches_to_mm(p.get("width"))})
-        time.sleep(1)  # API limit is 5 req/s; be polite
-    return out
-
-
-def _inches_to_mm(v) -> int | None:
-    m = re.search(r"([\d.]+)", str(v or ""))
-    return round(float(m.group(1)) * 25.4) if m else None
-
-
 def slickdeals_items() -> list[dict]:
     out = []
     for q in ("rtx 5070 ti", "rtx 5070", "rtx 5080", "rtx 5090"):
@@ -219,7 +192,7 @@ def slickdeals_items() -> list[dict]:
     return out
 
 
-SOURCES = {"reddit": reddit_posts, "bestbuy": bestbuy_products, "slickdeals": slickdeals_items}
+SOURCES = {"reddit": reddit_posts, "slickdeals": slickdeals_items}
 
 
 # ------------------------------------------------------------ notify/state ---
@@ -293,10 +266,10 @@ def main(dry=False):
             if it["id"] in state["seen"] or it.get("expired"):
                 continue
             state["seen"][it["id"]] = now
-            ok, why, info = evaluate(it["title"], it.get("price") or parse_price(it["title"]), it.get("length_mm"))
+            ok, why, info = evaluate(it["title"], parse_price(it["title"]))
             if not ok:
                 continue
-            if first_run and name != "bestbuy":
+            if first_run:
                 continue  # seed the de-dupe list on first run instead of spamming old posts
             length = f"~{info['length']}mm" if info["length"] else "length unknown - verify <350mm"
             tax = f" (~${info['total']:,.0f} w/ tax)" if TAX_RATE else ""
