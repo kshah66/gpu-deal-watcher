@@ -390,7 +390,8 @@ def test_review(max_deals=3):
     for d in matches[:max_deals]:
         print(f"  - {d['card']} ${d['price']:,.2f} via {d['source']}")
     if matches:
-        claude_review(matches[:max_deals], matches[max_deals:max_deals + 5], label="TEST: ")
+        recent = [d for d in matches[max_deals:] if now - d["alerted_at"] < MAX_AGE_DAYS * 86400][:5]
+        claude_review(matches[:max_deals], recent, label="TEST: ")
 
 
 # ---------------------------------------------------------------- tests ---

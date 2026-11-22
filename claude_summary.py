@@ -34,8 +34,9 @@ For each NEW deal you are given the post title and an excerpt of its deal page. 
   mobile-app-only price, rebate or promo code needed, per-customer limits, a seller other than the retailer.
 - Note the exact card model and, if you can tell, whether it is a long or thick card.
 
-Then pick the single best buy right now among the new deals and the recent ones (recent ones may have expired;
-say so if you are relying on one), and say in one line whether to buy now or wait.
+Then pick the single best buy right now. Only recommend a deal whose page shows it is live. Recent deals were not
+re-checked: mention one only if it was alerted in the last 48 hours, and label it "unverified". Never recommend a
+deal older than that. If nothing qualifies, say "Best buy now: none confirmed live - keep waiting" and stop.
 
 Format: plain text with Discord markdown, no headings, at most 1200 characters.
 One line per new deal starting with ✅ (looks live), ❌ (looks dead) or ⚠️ (live with a catch / unverified),
@@ -105,7 +106,7 @@ def build_prompt(new: list[dict], recent: list[dict], settings: dict, fetch) -> 
             f"</deal {i}>",
         ]
     if recent:
-        lines += ["", "RECENT deals already alerted in the past week (not re-checked; may have expired):"]
+        lines += ["", "RECENT deals already alerted in the past week (NOT re-checked; may have expired):"]
         for d in recent[-10:]:
             lines.append(f"- {_when(d['alerted_at'])}: {d['card']} ${d['price']:,.2f} - {d['title']} ({d['thread']})")
     return "\n".join(lines)
