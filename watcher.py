@@ -23,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 # ----------------------------------------------------------------- config ---
@@ -31,6 +32,7 @@ NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")  # Server Settings > Integrations > Webhooks
 TAX_RATE = float(os.environ.get("TAX_RATE", "0"))      # e.g. 0.0825 -> ceilings include tax
 MAX_LENGTH_MM = int(os.environ.get("MAX_LENGTH_MM", "350"))
+MAX_AGE_DAYS = float(os.environ.get("MAX_AGE_DAYS", "3"))  # skip posts older than this (old deals are usually expired)
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 USER_AGENT = "script:gpu-deal-watcher:v1.0 (personal use)"
 # Reddit's API rules ask for "(by /u/<username>)" in the User-Agent. Read from a
@@ -150,7 +152,8 @@ def reddit_posts() -> list[dict]:
             out.append({"id": "reddit:" + d["id"], "title": d["title"],
                         "url": d.get("url_overridden_by_dest") or d["url"],
                         "thread": "https://www.reddit.com" + d["permalink"],
-                        "expired": d.get("link_flair_text", "") and "expired" in d.get("link_flair_text", "").lower()})
+                        "expired": d.get("link_flair_text", "") and "expired" in d.get("link_flair_text", "").lower(),
+                        "published": d.get("created_utc")})
         return out
     # Unauthenticated fallbacks. Reddit often blocks or 404s cloud/datacenter IPs,
     # so try a few public endpoints and report each failure.
@@ -170,7 +173,8 @@ def reddit_posts() -> list[dict]:
         if url.endswith("raw_json=1") or b'"kind"' in body[:50]:
             return [{"id": "reddit:" + c["data"]["id"], "title": c["data"]["title"],
                      "url": c["data"].get("url_overridden_by_dest") or c["data"]["url"],
-                     "thread": "https://www.reddit.com" + c["data"]["permalink"], "expired": False}
+                     "thread": "https://www.reddit.com" + c["data"]["permalink"], "expired": False,
+                     "published": c["data"].get("created_utc")}
                     for c in json.loads(body)["data"]["children"]]
         try:
             root = ET.fromstring(body)
@@ -182,10 +186,26 @@ def reddit_posts() -> list[dict]:
         for e in root.findall("a:entry", ns):
             link = e.find("a:link", ns).get("href")
             out.append({"id": "reddit:" + e.find("a:id", ns).text, "title": html.unescape(e.find("a:title", ns).text),
-                        "url": link, "thread": link, "expired": False})
+                        "url": link, "thread": link, "expired": False,
+                        "published": _iso_to_epoch(e.findtext("a:published", None, ns) or e.findtext("a:updated", None, ns))})
         print(f"reddit: using {urllib.parse.urlsplit(url).netloc}{urllib.parse.urlsplit(url).path}")
         return out
     raise RuntimeError("all public Reddit endpoints failed: " + " | ".join(errors))
+
+
+def _rfc822_to_epoch(v: str | None) -> float | None:
+    try:
+        return parsedate_to_datetime(v.strip()).timestamp() if v else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _iso_to_epoch(v: str | None) -> float | None:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(v.strip().replace("Z", "+00:00")).timestamp() if v else None
+    except ValueError:
+        return None
 
 
 def rss_items(source: str, url: str) -> list[dict]:
@@ -196,7 +216,8 @@ def rss_items(source: str, url: str) -> list[dict]:
         guid = (it.findtext("guid") or link).strip()
         title = html.unescape((it.findtext("title") or "").strip())
         out.append({"id": f"{source}:{guid.split('?')[0]}", "title": title,
-                    "url": link, "thread": link, "expired": False})
+                    "url": link, "thread": link, "expired": False,
+                    "published": _rfc822_to_epoch(it.findtext("pubDate"))})
     return out
 
 
@@ -232,12 +253,13 @@ def notify(title: str, body: str, url: str, priority: str = "high", tags: str = 
     errors = []
     if DISCORD_WEBHOOK_URL:
         warn = tags == "warning"
+        icon = {"warning": "⚠️ ", "brain": "🧠 "}.get(tags, "🚨 ")
         payload = {
             "username": "GPU Deal Watcher",
             # Plain-text content is what shows in the phone push; the embed adds a clickable title.
-            "content": ("⚠️ " if warn else "🚨 ") + title[:200],
+            "content": icon + title[:200],
             "embeds": [{"title": title[:256], "url": url, "description": body[:4000],
-                        "color": 0xF0B232 if warn else 0x76B900}],
+                        "color": 0xF0B232 if warn else (0x5865F2 if tags == "brain" else 0x76B900)}],
             "allowed_mentions": {"parse": []},
         }
         try:
@@ -254,6 +276,26 @@ def notify(title: str, body: str, url: str, priority: str = "high", tags: str = 
             errors.append(f"ntfy: {type(e).__name__}")
     if errors:  # never print the webhook URL - it is a secret
         print("notify failed: " + ", ".join(errors), file=sys.stderr)
+
+
+def claude_review(new: list[dict], recent: list[dict], dry=False):
+    """Optional: ask Claude to check the new deals' pages and recommend the best buy.
+    Needs ANTHROPIC_API_KEY and the `anthropic` package; skipped quietly otherwise."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("claude review: skipped (no ANTHROPIC_API_KEY)")
+        return
+    try:
+        import claude_summary
+        settings = {"ceilings": {k: v["max"] for k, v in CARDS.items()}, "tax_rate": TAX_RATE,
+                    "max_length_mm": MAX_LENGTH_MM}
+        text = claude_summary.review(new, recent, settings, fetch=http)
+    except Exception as e:  # never let the review break alerting
+        print(f"claude review: FAILED {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
+        return
+    if text:
+        notify("Claude's take on the new deal(s)", text, new[0]["url"],
+               priority="default", tags="brain", dry=dry)
+        print("claude review: sent")
 
 
 def load_state() -> dict:
@@ -276,11 +318,14 @@ def main(dry=False):
     if state["seen"] and not seeded:  # state from before per-source seeding existed
         seeded = {"slickdeals"}  # the only source that had succeeded before
     alerts = 0
+    new_matches: list[dict] = []
     for name, fn in SOURCES.items():
         try:
             items = fn()
             state["errors"].pop(name, None)
-            print(f"{name}: {len(items)} items")
+            dated = [i["published"] for i in items if i.get("published")]
+            old = sum(1 for t in dated if now - t > MAX_AGE_DAYS * 86400)
+            print(f"{name}: {len(items)} items ({len(dated)} dated, {old} older than {MAX_AGE_DAYS:g} days)")
         except Exception as e:
             print(f"{name}: FAILED {type(e).__name__}: {e}", file=sys.stderr)
             err = state["errors"].setdefault(name, {"count": 0, "notified": 0})
@@ -296,6 +341,8 @@ def main(dry=False):
             if it["id"] in state["seen"] or it.get("expired"):
                 continue
             state["seen"][it["id"]] = now
+            if it.get("published") and now - it["published"] > MAX_AGE_DAYS * 86400:
+                continue  # old post: the deal has most likely expired
             ok, why, info = evaluate(it["title"], parse_price(it["title"]))
             if not ok:
                 continue
@@ -307,8 +354,15 @@ def main(dry=False):
                    f"{it['title']}\n{length} | via {name}\nThread: {it['thread']}",
                    it["url"], dry=dry)
             alerts += 1
+            new_matches.append({**info, "title": it["title"], "url": it["url"], "thread": it["thread"],
+                                "source": name, "alerted_at": now})
         seeded.add(name)  # after the first successful fetch, new items alert normally
     state["seeded"] = sorted(seeded)
+    # Keep a week of alerted deals so Claude can compare new ones against recent ones.
+    recent = [d for d in state.get("recent_alerts", []) if now - d["alerted_at"] < 7 * 86400]
+    if new_matches:
+        claude_review(new_matches, recent, dry=dry)
+    state["recent_alerts"] = (recent + new_matches)[-30:]
     save_state(state)
     print(f"done: {alerts} alert(s)")
 
