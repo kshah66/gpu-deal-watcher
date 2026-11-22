@@ -144,15 +144,32 @@ def reddit_posts() -> list[dict]:
                         "thread": "https://www.reddit.com" + d["permalink"],
                         "expired": d.get("link_flair_text", "") and "expired" in d.get("link_flair_text", "").lower()})
         return out
-    # Unauthenticated fallback: RSS. Reddit often 403s cloud/datacenter IPs here.
-    root = ET.fromstring(http("https://www.reddit.com/r/buildapcsales/new/.rss?limit=100", headers=ua))
-    ns = {"a": "http://www.w3.org/2005/Atom"}
-    out = []
-    for e in root.findall("a:entry", ns):
-        link = e.find("a:link", ns).get("href")
-        out.append({"id": "reddit:" + e.find("a:id", ns).text, "title": html.unescape(e.find("a:title", ns).text),
-                    "url": link, "thread": link, "expired": False})
-    return out
+    # Unauthenticated fallbacks. Reddit often blocks or 404s cloud/datacenter IPs,
+    # so try a few public endpoints and report each failure.
+    errors = []
+    for url in ("https://www.reddit.com/r/buildapcsales/new/.rss",
+                "https://old.reddit.com/r/buildapcsales/new/.rss",
+                "https://www.reddit.com/r/buildapcsales/new.json?limit=100&raw_json=1"):
+        try:
+            body = http(url, headers=ua)
+        except Exception as e:
+            errors.append(f"{urllib.parse.urlsplit(url).netloc}{urllib.parse.urlsplit(url).path}: {e}")
+            continue
+        if url.endswith("raw_json=1") or b'"kind"' in body[:50]:
+            return [{"id": "reddit:" + c["data"]["id"], "title": c["data"]["title"],
+                     "url": c["data"].get("url_overridden_by_dest") or c["data"]["url"],
+                     "thread": "https://www.reddit.com" + c["data"]["permalink"], "expired": False}
+                    for c in json.loads(body)["data"]["children"]]
+        root = ET.fromstring(body)
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        out = []
+        for e in root.findall("a:entry", ns):
+            link = e.find("a:link", ns).get("href")
+            out.append({"id": "reddit:" + e.find("a:id", ns).text, "title": html.unescape(e.find("a:title", ns).text),
+                        "url": link, "thread": link, "expired": False})
+        print(f"reddit: using {urllib.parse.urlsplit(url).netloc}{urllib.parse.urlsplit(url).path}")
+        return out
+    raise RuntimeError("all public Reddit endpoints failed: " + " | ".join(errors))
 
 
 def bestbuy_products() -> list[dict]:
