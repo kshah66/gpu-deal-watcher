@@ -91,6 +91,9 @@ def build_prompt(new: list[dict], recent: list[dict], settings: dict, fetch) -> 
         f"Now: {_when(datetime.now(timezone.utc).timestamp())}",
         f"Sales tax rate: {tax:.5f}" if tax else "Sales tax: not set (prices are pre-tax)",
         f"Max card length: {settings['max_length_mm']} mm",
+        (f"Stores the shopper can visit: {settings['nearby_stores']}. For in-store or limited-location deals, "
+         "say whether the page or comments suggest stock at one of these stores."
+         if settings.get("nearby_stores") else "Nearby stores: not given."),
         "Price ceilings incl. tax: " + ", ".join(f"{k} ${v:,.0f}" for k, v in settings["ceilings"].items()),
         "",
         "NEW deals (just alerted):",
@@ -100,7 +103,8 @@ def build_prompt(new: list[dict], recent: list[dict], settings: dict, fetch) -> 
         lines += [
             f"<deal {i}>",
             f"Title: {d['title']}",
-            f"Card: {d['card']} | price ${d['price']:,.2f} (~${d['total']:,.0f} with tax) | {length} | via {d['source']}",
+            f"Card: {d['card']} | price ${d['price']:,.2f} (~${d['total']:,.0f} with tax) | {length} | via {d['source']}"
+            + (" | in-store/limited locations" if d.get("in_store") else ""),
             f"Link: {d['thread']}",
             f"Page excerpt: {_excerpt(d['thread'], fetch)}",
             f"</deal {i}>",

@@ -34,23 +34,37 @@ TAX_RATE = float(os.environ.get("TAX_RATE", "0"))      # e.g. 0.0825 -> ceilings
 MAX_LENGTH_MM = int(os.environ.get("MAX_LENGTH_MM", "350"))
 MAX_AGE_DAYS = float(os.environ.get("MAX_AGE_DAYS", "3"))  # skip posts older than this (old deals are usually expired)
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
+DISCORD_USER_ID = os.environ.get("DISCORD_USER_ID", "").strip()  # @mention target for exceptional deals
+DIGEST_HOUR_UTC = int(os.environ.get("DIGEST_HOUR_UTC") or 1)  # daily summary hour (UTC); 1 = 8 PM US Eastern
+NEARBY_STORES = os.environ.get("NEARBY_STORES", "").strip()     # e.g. "Micro Center <store>, Best Buy <store>"
+PURCHASED = os.environ.get("PURCHASED", "").strip()             # set once you buy: the watcher stops itself
 USER_AGENT = "script:gpu-deal-watcher:v1.0 (personal use)"
 # Reddit's API rules ask for "(by /u/<username>)" in the User-Agent. Read from a
 # secret so the username isn't in the code, and sent only to Reddit.
 _reddit_user = os.environ.get("REDDIT_USERNAME", "").strip().removeprefix("/u/").removeprefix("u/")
 REDDIT_UA = f"script:gpu-deal-watcher:v1.0 (by /u/{_reddit_user})" if _reddit_user else USER_AGENT
 
-# Alert ceilings (pre-tax card price, USD). Default top ceiling is $1,500. Lower
-# ceilings on cheaper cards are "worth interrupting me" thresholds: e.g. the
-# 5070 Ti already sits at ~$1,340-1,480, so alerting at $1,500 would just be
-# noise - $1,300 means a real drop. Edit freely. Nvidia only.
+# Alert ceilings ("max", compared WITH tax when TAX_RATE is set). Default top
+# ceiling is $1,500. Lower ceilings on cheaper cards are "worth interrupting me"
+# thresholds: e.g. the 5070 Ti already sits at ~$1,340-1,480, so alerting at
+# $1,500 would just be noise - $1,300 means a real drop.
+# "hot" (pre-tax listed price): at or below this, the alert is marked 🔥 and
+# @mentions you, because deals that good sell out fast. Edit freely. Nvidia only.
 CARDS = {
-    "RTX 5090":    {"pattern": r"5090\b", "max": float(os.environ.get("MAX_5090", 1500))},
-    "RTX 5080":    {"pattern": r"5080\b", "max": float(os.environ.get("MAX_5080", 1500))},
-    "RTX 4080 Super": {"pattern": r"4080\s*-?\s*super\b", "max": float(os.environ.get("MAX_4080S", 1200))},
-    "RTX 5070 Ti": {"pattern": r"5070\s*-?\s*ti\b", "max": float(os.environ.get("MAX_5070TI", 1300))},
-    "RTX 5070":    {"pattern": r"5070(?!\s*-?\s*ti)\b", "max": float(os.environ.get("MAX_5070", 800))},
+    "RTX 5090":    {"pattern": r"5090\b", "max": float(os.environ.get("MAX_5090", 1500)),
+                    "hot": float(os.environ.get("HOT_5090", 1500))},
+    "RTX 5080":    {"pattern": r"5080\b", "max": float(os.environ.get("MAX_5080", 1500)),
+                    "hot": float(os.environ.get("HOT_5080", 1400))},
+    "RTX 4080 Super": {"pattern": r"4080\s*-?\s*super\b", "max": float(os.environ.get("MAX_4080S", 1200)),
+                    "hot": float(os.environ.get("HOT_4080S", 1000))},
+    "RTX 5070 Ti": {"pattern": r"5070\s*-?\s*ti\b", "max": float(os.environ.get("MAX_5070TI", 1300)),
+                    "hot": float(os.environ.get("HOT_5070TI", 1150))},
+    "RTX 5070":    {"pattern": r"5070(?!\s*-?\s*ti)\b", "max": float(os.environ.get("MAX_5070", 800)),
+                    "hot": float(os.environ.get("HOT_5070", 600))},
 }
+# Deals you can only get at a store, or only some stores.
+IN_STORE = re.compile(r"in[\s-]?store|store pick[\s-]?up|pick[\s-]?up only|select (stores|locations)|"
+                      r"\bymmv\b|micro ?center|\bb&m\b|while supplies last at", re.I)
 # Any title that names an AMD/Intel card is dropped.
 NON_NVIDIA = re.compile(r"radeon|\brx\s*\d{4}|\barc\s*[ab]\d{3}|\bxfx\b|sapphire|powercolor", re.I)
 
@@ -114,8 +128,9 @@ def card_length(title: str) -> int | None:
     return None
 
 
-def evaluate(title: str, price: float | None) -> tuple[bool, str, dict]:
-    """Return (alert?, reason, info)."""
+def evaluate(title: str, price: float | None, ignore_ceiling=False) -> tuple[bool, str, dict]:
+    """Return (alert?, reason, info). ignore_ceiling=True is used for price history:
+    "a new, fitting card of this type at this price", whatever the price."""
     if EXCLUDE.search(title):
         return False, "excluded (used/open-box/system/laptop)", {}
     if NON_NVIDIA.search(title):
@@ -127,12 +142,13 @@ def evaluate(title: str, price: float | None) -> tuple[bool, str, dict]:
         return False, "no price found", {"card": card}
     total = price * (1 + TAX_RATE)
     ceiling = CARDS[card]["max"]
-    if total > ceiling:
+    if total > ceiling and not ignore_ceiling:
         return False, f"{card} ${total:,.0f} > ${ceiling:,.0f}", {"card": card}
     length = card_length(title)
     if length and length > MAX_LENGTH_MM:
         return False, f"too long ({length}mm)", {"card": card}
-    return True, "match", {"card": card, "price": price, "total": total, "length": length}
+    return True, "match", {"card": card, "price": price, "total": total, "length": length,
+                           "hot": price <= CARDS[card]["hot"], "in_store": bool(IN_STORE.search(title))}
 
 
 # --------------------------------------------------------------- sources ---
@@ -245,22 +261,31 @@ SOURCES = {"reddit": reddit_posts, "slickdeals": slickdeals_items,
 
 
 # ------------------------------------------------------------ notify/state ---
-def notify(title: str, body: str, url: str, priority: str = "high", tags: str = "rotating_light", dry=False):
-    """Send to every configured channel (Discord webhook and/or ntfy). Prints if none."""
+def notify(title: str, body: str, url: str, priority: str = "high", tags: str = "rotating_light", dry=False,
+           mention=False):
+    """Send to every configured channel (Discord webhook and/or ntfy). Prints if none.
+    mention=True @mentions you on Discord (DISCORD_USER_ID, else @everyone) and sends ntfy as urgent."""
     if dry or not (NTFY_TOPIC or DISCORD_WEBHOOK_URL):
         print(f"[ALERT] {title}\n  {body}\n  {url}")
         return
     errors = []
     if DISCORD_WEBHOOK_URL:
         warn = tags == "warning"
-        icon = {"warning": "⚠️ ", "brain": "🧠 "}.get(tags, "🚨 ")
+        icon = {"warning": "⚠️ ", "brain": "🧠 ", "fire": "🔥 ", "bar_chart": "📊 ", "tada": "🎉 "}.get(tags, "🚨 ")
+        ping, allowed = "", {"parse": []}
+        if mention:
+            if DISCORD_USER_ID:
+                ping, allowed = f"<@{DISCORD_USER_ID}> ", {"users": [DISCORD_USER_ID]}
+            else:
+                ping, allowed = "@everyone ", {"parse": ["everyone"]}
         payload = {
             "username": "GPU Deal Watcher",
             # Plain-text content is what shows in the phone push; the embed adds a clickable title.
-            "content": icon + title[:200],
+            "content": ping + icon + title[:200],
             "embeds": [{"title": title[:256], "url": url, "description": body[:4000],
-                        "color": 0xF0B232 if warn else (0x5865F2 if tags == "brain" else 0x76B900)}],
-            "allowed_mentions": {"parse": []},
+                        "color": 0xF0B232 if warn else {"brain": 0x5865F2, "fire": 0xED4245,
+                                                        "bar_chart": 0x99AAB5}.get(tags, 0x76B900)}],
+            "allowed_mentions": allowed,
         }
         try:
             http(DISCORD_WEBHOOK_URL, data=json.dumps(payload).encode(),
@@ -271,7 +296,8 @@ def notify(title: str, body: str, url: str, priority: str = "high", tags: str = 
         ascii_ = lambda s: s.encode("ascii", "ignore").decode()
         try:
             http(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=body.encode(),
-                 headers={"Title": ascii_(title)[:250], "Click": url, "Priority": priority, "Tags": tags})
+                 headers={"Title": ascii_(title)[:250], "Click": url, "Tags": tags,
+                          "Priority": "urgent" if mention else priority})
         except Exception as e:
             errors.append(f"ntfy: {type(e).__name__}")
     if errors:  # never print the webhook URL - it is a secret
@@ -287,7 +313,7 @@ def claude_review(new: list[dict], recent: list[dict], dry=False, label=""):
     try:
         import claude_summary
         settings = {"ceilings": {k: v["max"] for k, v in CARDS.items()}, "tax_rate": TAX_RATE,
-                    "max_length_mm": MAX_LENGTH_MM}
+                    "max_length_mm": MAX_LENGTH_MM, "nearby_stores": NEARBY_STORES}
         text = claude_summary.review(new, recent, settings, fetch=http)
     except Exception as e:  # never let the review break alerting
         print(f"claude review: FAILED {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
@@ -308,26 +334,51 @@ def load_state() -> dict:
 def save_state(s: dict):
     cutoff = time.time() - 14 * 86400
     s["seen"] = {k: v for k, v in s["seen"].items() if v > cutoff}
+    week = time.time() - 7 * 86400
+    s["price_log"] = dict(sorted(((k, v) for k, v in s.get("price_log", {}).items() if v["ts"] > week),
+                                 key=lambda kv: kv[1]["ts"])[-500:])
     STATE_FILE.write_text(json.dumps(s, indent=1))
+
+
+def _price_context(plog: dict, card: str, item_id: str, price: float, now: float) -> str:
+    """Compare a deal with the lowest price seen for the same card in the feeds this week."""
+    week = [e["price"] for k, e in plog.items()
+            if e["card"] == card and k != item_id and now - e["ts"] < 7 * 86400]
+    if not week:
+        return f"Price context: first {card} seen in the feeds this week"
+    low = min(week)
+    if price < low:
+        return f"Price context: ${low - price:,.0f} below this week's low (${low:,.2f}) 📉"
+    if price == low:
+        return f"Price context: ties this week's low (${low:,.2f})"
+    return f"Price context: ${price - low:,.0f} above this week's low (${low:,.2f})"
 
 
 def main(dry=False):
     state = load_state()
     now = time.time()
+    if PURCHASED:
+        finish_after_purchase(state, dry=dry)
+        return
     seeded = set(state.setdefault("seeded", []))
     if state["seen"] and not seeded:  # state from before per-source seeding existed
         seeded = {"slickdeals"}  # the only source that had succeeded before
+    stats = state.setdefault("stats", {"since": now, "runs": 0, "alerts": 0, "ok": {}, "failed": {}})
+    stats["runs"] += 1
+    plog = state.setdefault("price_log", {})
     alerts = 0
     new_matches: list[dict] = []
     for name, fn in SOURCES.items():
         try:
             items = fn()
             state["errors"].pop(name, None)
+            stats["ok"][name] = stats["ok"].get(name, 0) + 1
             dated = [i["published"] for i in items if i.get("published")]
             old = sum(1 for t in dated if now - t > MAX_AGE_DAYS * 86400)
             print(f"{name}: {len(items)} items ({len(dated)} dated, {old} older than {MAX_AGE_DAYS:g} days)")
         except Exception as e:
             print(f"{name}: FAILED {type(e).__name__}: {e}", file=sys.stderr)
+            stats["failed"][name] = stats["failed"].get(name, 0) + 1
             err = state["errors"].setdefault(name, {"count": 0, "notified": 0})
             err["count"] += 1
             # Tell the user once a day if a source keeps failing - don't silently go blind.
@@ -338,22 +389,38 @@ def main(dry=False):
                 err["notified"] = now
             continue
         for it in items:
+            fresh = not (it.get("published") and now - it["published"] > MAX_AGE_DAYS * 86400)
+            price = parse_price(it["title"])
+            # Price history: every fresh, new, fitting target card at any price (deduped by post).
+            if fresh and it["id"] not in plog and not it.get("expired"):
+                ok_any, _, info_any = evaluate(it["title"], price, ignore_ceiling=True)
+                if ok_any:
+                    plog[it["id"]] = {"card": info_any["card"], "price": price, "ts": it.get("published") or now,
+                                      "title": it["title"][:200], "thread": it["thread"], "source": name}
             if it["id"] in state["seen"] or it.get("expired"):
                 continue
             state["seen"][it["id"]] = now
-            if it.get("published") and now - it["published"] > MAX_AGE_DAYS * 86400:
+            if not fresh:
                 continue  # old post: the deal has most likely expired
-            ok, why, info = evaluate(it["title"], parse_price(it["title"]))
+            ok, why, info = evaluate(it["title"], price)
             if not ok:
                 continue
             if name not in seeded:
                 continue  # seed the de-dupe list on first run instead of spamming old posts
-            length = f"~{info['length']}mm" if info["length"] else "length unknown - verify <350mm"
+            length = f"~{info['length']}mm" if info["length"] else f"length unknown - verify <{MAX_LENGTH_MM}mm"
             tax = f" (~${info['total']:,.0f} w/ tax)" if TAX_RATE else ""
-            notify(f"{info['card']} ${info['price']:,.2f}{tax}",
-                   f"{it['title']}\n{length} | via {name}\nThread: {it['thread']}",
-                   it["url"], dry=dry)
+            lines = [it["title"], f"{length} | via {name}",
+                     _price_context(plog, info["card"], it["id"], info["price"], now)]
+            if info["in_store"]:
+                lines.append("🏬 In-store / limited locations - check stock at your local store"
+                             + (f" ({NEARBY_STORES})" if NEARBY_STORES else ""))
+            lines.append(f"Thread: {it['thread']}")
+            title = (("HOT DEAL: " if info["hot"] else "") + f"{info['card']} ${info['price']:,.2f}{tax}"
+                     + (" [in-store]" if info["in_store"] else ""))
+            notify(title, "\n".join(lines), it["url"], dry=dry,
+                   tags="fire" if info["hot"] else "rotating_light", mention=info["hot"])
             alerts += 1
+            stats["alerts"] += 1
             new_matches.append({**info, "title": it["title"], "url": it["url"], "thread": it["thread"],
                                 "source": name, "alerted_at": now})
         seeded.add(name)  # after the first successful fetch, new items alert normally
@@ -363,8 +430,66 @@ def main(dry=False):
     if new_matches:
         claude_review(new_matches, recent, dry=dry)
     state["recent_alerts"] = (recent + new_matches)[-30:]
+    maybe_send_digest(state, now, dry=dry)
     save_state(state)
     print(f"done: {alerts} alert(s)")
+
+
+def maybe_send_digest(state: dict, now: float, dry=False, force=False):
+    """Once a day (first run at/after DIGEST_HOUR_UTC): proof of life + cheapest prices seen."""
+    t = time.gmtime(now)
+    today = time.strftime("%Y-%m-%d", t)
+    if not force and (t.tm_hour < DIGEST_HOUR_UTC or state.get("digest_date") == today):
+        return
+    stats = state.get("stats", {})
+    hours = (now - stats.get("since", now)) / 3600
+    lines = [f"Last {hours:.0f}h: {stats.get('runs', 0)} runs, {stats.get('alerts', 0)} deal alert(s)."]
+    names = sorted(set(stats.get("ok", {})) | set(stats.get("failed", {})) | set(SOURCES))
+    src = []
+    for n in names:
+        good, bad = stats.get("ok", {}).get(n, 0), stats.get("failed", {}).get(n, 0)
+        src.append(f"{n} ✅" if bad == 0 and good else f"{n} ❌ failed {bad}/{good + bad}" if bad else f"{n} -")
+    lines.append("Sources: " + ", ".join(src))
+    lines.append("")
+    lines.append("Cheapest new, fitting card seen in the feeds (last 24h, any price, not re-checked):")
+    plog = state.get("price_log", {})
+    for card in CARDS:
+        day = [e for e in plog.values() if e["card"] == card and now - e["ts"] < 86400]
+        if not day:
+            lines.append(f"• {card}: none seen")
+            continue
+        e = min(day, key=lambda x: x["price"])
+        tax = f" (~${e['price'] * (1 + TAX_RATE):,.0f} w/ tax)" if TAX_RATE else ""
+        lines.append(f"• {card}: ${e['price']:,.2f}{tax} - {e['title'][:90]} {e['thread']}")
+    notify(f"Daily GPU watcher summary - {today}", "\n".join(lines), "https://github.com",
+           priority="low", tags="bar_chart", dry=dry)
+    state["digest_date"] = today
+    state["stats"] = {"since": now, "runs": 0, "alerts": 0, "ok": {}, "failed": {}}
+    print("digest: sent")
+
+
+def finish_after_purchase(state: dict, dry=False):
+    """PURCHASED is set: say goodbye once, then disable this workflow so it stops running."""
+    if not state.get("purchase_notified"):
+        notify("GPU watcher stopped - you bought a GPU",
+               f"Purchased: {PURCHASED}\nNo more deal alerts. The watcher has disabled its own workflow.\n"
+               "To restart it: delete the PURCHASED secret, then Actions > gpu-deal-watcher > Enable workflow.",
+               "https://github.com", priority="default", tags="tada", dry=dry)
+        state["purchase_notified"] = True
+        save_state(state)
+    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not (repo and token):
+        print("purchased: not running in GitHub Actions, so the workflow was not disabled")
+        return
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/actions/workflows/watch.yml/disable", data=b"", method="PUT",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            print(f"purchased: workflow disabled (HTTP {r.status})")
+    except Exception as e:
+        print(f"purchased: could not disable the workflow ({e}); disable it in the Actions tab", file=sys.stderr)
 
 
 def test_review(max_deals=3):

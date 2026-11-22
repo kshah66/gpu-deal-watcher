@@ -9,6 +9,9 @@ on:
         type: boolean
         default: false
 concurrency: { group: watcher, cancel-in-progress: false }
+permissions:
+  contents: read
+  actions: write   # lets the watcher disable its own workflow once PURCHASED is set
 jobs:
   watch:
     runs-on: ubuntu-latest
@@ -34,6 +37,11 @@ jobs:
           REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}   # optional; defaults to claude-opus-5-5
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}   # optional; @mention for hot deals
+          NEARBY_STORES: ${{ secrets.NEARBY_STORES }}       # optional; secret so your area stays private
+          PURCHASED: ${{ secrets.PURCHASED }}               # set after buying: watcher stops itself
+          DIGEST_HOUR_UTC: ${{ vars.DIGEST_HOUR_UTC }}      # optional; default 1 (8 PM US Eastern)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAX_RATE: ${{ secrets.TAX_RATE || '0' }}   # secret, so the value stays masked in public logs
         run: python watcher.py ${{ inputs.test_review && '--test-review' || '' }}
       - name: Save de-dupe state
