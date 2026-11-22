@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GPU deal watcher -> ntfy push alerts.
+"""GPU deal watcher -> Discord and/or ntfy push alerts.
 
 Sources (each one optional, failures are reported, never faked):
   * r/buildapcsales  - Reddit OAuth API if REDDIT_CLIENT_ID/SECRET set, else public RSS
@@ -29,6 +29,7 @@ from pathlib import Path
 # ----------------------------------------------------------------- config ---
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")          # pick a long random topic name
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")  # Server Settings > Integrations > Webhooks
 TAX_RATE = float(os.environ.get("TAX_RATE", "0"))      # e.g. 0.0825 -> ceilings include tax
 MAX_LENGTH_MM = int(os.environ.get("MAX_LENGTH_MM", "350"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
@@ -193,12 +194,35 @@ SOURCES = {"reddit": reddit_posts, "bestbuy": bestbuy_products, "slickdeals": sl
 
 # ------------------------------------------------------------ notify/state ---
 def notify(title: str, body: str, url: str, priority: str = "high", tags: str = "rotating_light", dry=False):
-    if dry or not NTFY_TOPIC:
+    """Send to every configured channel (Discord webhook and/or ntfy). Prints if none."""
+    if dry or not (NTFY_TOPIC or DISCORD_WEBHOOK_URL):
         print(f"[ALERT] {title}\n  {body}\n  {url}")
         return
-    ascii_ = lambda s: s.encode("ascii", "ignore").decode()
-    http(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=body.encode(),
-         headers={"Title": ascii_(title)[:250], "Click": url, "Priority": priority, "Tags": tags})
+    errors = []
+    if DISCORD_WEBHOOK_URL:
+        warn = tags == "warning"
+        payload = {
+            "username": "GPU Deal Watcher",
+            # Plain-text content is what shows in the phone push; the embed adds a clickable title.
+            "content": ("⚠️ " if warn else "🚨 ") + title[:200],
+            "embeds": [{"title": title[:256], "url": url, "description": body[:4000],
+                        "color": 0xF0B232 if warn else 0x76B900}],
+            "allowed_mentions": {"parse": []},
+        }
+        try:
+            http(DISCORD_WEBHOOK_URL, data=json.dumps(payload).encode(),
+                 headers={"Content-Type": "application/json"})
+        except Exception as e:
+            errors.append(f"discord: {type(e).__name__}")
+    if NTFY_TOPIC:
+        ascii_ = lambda s: s.encode("ascii", "ignore").decode()
+        try:
+            http(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=body.encode(),
+                 headers={"Title": ascii_(title)[:250], "Click": url, "Priority": priority, "Tags": tags})
+        except Exception as e:
+            errors.append(f"ntfy: {type(e).__name__}")
+    if errors:  # never print the webhook URL - it is a secret
+        print("notify failed: " + ", ".join(errors), file=sys.stderr)
 
 
 def load_state() -> dict:
@@ -232,7 +256,7 @@ def main(dry=False):
             if err["count"] >= 3 and now - err["notified"] > 86400:
                 notify(f"GPU watcher: {name} source failing",
                        f"{name} failed {err['count']} runs in a row: {type(e).__name__}: {str(e)[:200]}",
-                       "https://ntfy.sh", priority="default", tags="warning", dry=dry)
+                       "https://github.com", priority="default", tags="warning", dry=dry)
                 err["notified"] = now
             continue
         for it in items:

@@ -2,16 +2,20 @@
 
 Every 10 minutes it checks r/buildapcsales, Best Buy, and Slickdeals.
 It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
-It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone with ntfy.
+It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone via a Discord webhook and/or ntfy.
 
 ## Setup (about 15 minutes)
 
-1. **ntfy:** install the ntfy app (iOS or Android) and subscribe to a long, random topic, e.g. `gpu-7f3k9q2x-deals`.
-   Anyone who knows the topic name can read it, so don't use a guessable name.
+1. **Pick a push channel** (one or both):
+   - **Discord:** in a server you own, open the channel's settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.
+     Treat the URL like a password: anyone who has it can post to that channel.
+     For phone pushes, set that channel's notifications to "All Messages" in the Discord app.
+   - **ntfy:** install the ntfy app and subscribe to a long, random topic, e.g. `gpu-7f3k9q2x-deals`.
+     Anyone who knows the topic name can read it, so don't use a guessable name.
 2. **Repo:** create a new **public** GitHub repo (public repos get free, unlimited Actions minutes).
    Push `watcher.py` and `.github/workflows/watch.yml` to it.
 3. **Secrets** (Settings → Secrets and variables → Actions):
-   - `NTFY_TOPIC` (required)
+   - `DISCORD_WEBHOOK_URL` and/or `NTFY_TOPIC` (at least one is required)
    - `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` (strongly recommended).
      Create a "script" app at https://www.reddit.com/prefs/apps.
      Without them, the watcher falls back to Reddit's public RSS, which Reddit often blocks from GitHub's servers.
@@ -21,7 +25,9 @@ It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone w
 4. Go to Actions → gpu-deal-watcher → **Run workflow** once.
    The first run quietly records what's already posted, so you won't get a flood of old deals.
    Check the log: each source should report `N items`.
-5. **Test the push:** `curl -d "test" ntfy.sh/<your-topic>`
+5. **Test the push:**
+   - Discord: `curl -H "Content-Type: application/json" -d '{"content":"test"}' "<webhook-url>"`
+   - ntfy: `curl -d "test" ntfy.sh/<your-topic>`
 6. **After Nov 30:** disable the workflow (Actions → ⋯ → Disable).
 
 If a source fails 3 runs in a row, you get one warning push per day.
