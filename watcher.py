@@ -379,6 +379,8 @@ def test_review(max_deals=3):
             print(f"{name}: FAILED {type(e).__name__}")
             continue
         for it in items:
+            if any(m["thread"] == it["thread"] for m in matches):
+                continue  # same post found by two searches
             ok, _, info = evaluate(it["title"], parse_price(it["title"]))
             if ok:
                 matches.append({**info, "title": it["title"], "url": it["url"], "thread": it["thread"],
