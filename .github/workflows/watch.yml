@@ -2,7 +2,12 @@ name: gpu-deal-watcher
 on:
   schedule:
     - cron: "*/10 * * * *"     # every 10 min (GitHub may delay runs a few minutes at busy times)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test_review:
+        description: "Send a TEST Claude review of the newest matching deals (doesn't change state)"
+        type: boolean
+        default: false
 concurrency: { group: watcher, cancel-in-progress: false }
 jobs:
   watch:
@@ -30,7 +35,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}   # optional; defaults to claude-opus-5-5
           TAX_RATE: ${{ secrets.TAX_RATE || '0' }}   # secret, so the value stays masked in public logs
-        run: python watcher.py
+        run: python watcher.py ${{ inputs.test_review && '--test-review' || '' }}
       - name: Save de-dupe state
         if: always()
         uses: actions/cache/save@v4

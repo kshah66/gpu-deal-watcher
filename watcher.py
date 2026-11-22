@@ -278,7 +278,7 @@ def notify(title: str, body: str, url: str, priority: str = "high", tags: str = 
         print("notify failed: " + ", ".join(errors), file=sys.stderr)
 
 
-def claude_review(new: list[dict], recent: list[dict], dry=False):
+def claude_review(new: list[dict], recent: list[dict], dry=False, label=""):
     """Optional: ask Claude to check the new deals' pages and recommend the best buy.
     Needs ANTHROPIC_API_KEY and the `anthropic` package; skipped quietly otherwise."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -293,7 +293,7 @@ def claude_review(new: list[dict], recent: list[dict], dry=False):
         print(f"claude review: FAILED {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
         return
     if text:
-        notify("Claude's take on the new deal(s)", text, new[0]["url"],
+        notify(f"{label}Claude's take on the new deal(s)", text, new[0]["url"],
                priority="default", tags="brain", dry=dry)
         print("claude review: sent")
 
@@ -367,6 +367,30 @@ def main(dry=False):
     print(f"done: {alerts} alert(s)")
 
 
+def test_review(max_deals=3):
+    """Run Claude's review on the newest deals in the feeds that pass the filters,
+    ignoring the de-dupe list and the age limit. Doesn't touch saved state."""
+    now = time.time()
+    matches = []
+    for name, fn in SOURCES.items():
+        try:
+            items = fn()
+        except Exception as e:
+            print(f"{name}: FAILED {type(e).__name__}")
+            continue
+        for it in items:
+            ok, _, info = evaluate(it["title"], parse_price(it["title"]))
+            if ok:
+                matches.append({**info, "title": it["title"], "url": it["url"], "thread": it["thread"],
+                                "source": name, "alerted_at": it.get("published") or now})
+    matches.sort(key=lambda d: d["alerted_at"], reverse=True)
+    print(f"test review: {len(matches)} matching deals in feeds; reviewing newest {min(max_deals, len(matches))}")
+    for d in matches[:max_deals]:
+        print(f"  - {d['card']} ${d['price']:,.2f} via {d['source']}")
+    if matches:
+        claude_review(matches[:max_deals], matches[max_deals:max_deals + 5], label="TEST: ")
+
+
 # ---------------------------------------------------------------- tests ---
 def self_test():
     cases = [
@@ -402,4 +426,7 @@ def self_test():
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
+    if "--test-review" in sys.argv:
+        test_review()
+        sys.exit(0)
     main(dry="--dry-run" in sys.argv)
