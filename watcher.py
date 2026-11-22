@@ -54,7 +54,7 @@ NON_NVIDIA = re.compile(r"radeon|\brx\s*\d{4}|\barc\s*[ab]\d{3}|\bxfx\b|sapphire
 
 # Things we never want: used/refurb/open-box, systems, laptops.
 EXCLUDE = re.compile(
-    r"open[\s-]?box|refurb|renewed|\bused\b|pre[\s-]?owned|\bb-?stock\b|recertified|"
+    r"\brig\b|open[\s-]?box|refurb|renewed|\bused\b|pre[\s-]?owned|\bb-?stock\b|recertified|"
     r"laptop|notebook|prebuilt|pre-built|gaming pc|desktop pc|\bpc\b.*\b(ryzen|core|intel)\b|"
     r"powerspec|ibuypower|cyberpower|skytech|alienware|\bomen\b|\blegion\b|nitro \d0|\btower\b",
     re.I,
@@ -88,9 +88,18 @@ def classify(title: str) -> str | None:
 
 
 def parse_price(title: str) -> float | None:
-    """buildapcsales titles look like '[GPU] Foo 5070 Ti ($1,149.99 - $50 promo = $1,099.99)'.
-    Use the last dollar amount >= $200 (the final price); ignore promo/shipping amounts."""
-    amounts = [float(a.replace(",", "")) for a in re.findall(r"\$\s?([\d,]+(?:\.\d{1,2})?)", title)]
+    """Find the deal price in a title.
+    buildapcsales: '[GPU] Foo 5070 Ti ($1,149.99 - $50 promo = $1,099.99)'
+    DealNews:      'MSI RTX 5070 Ti 16GB Graphics Card for $1,199 + free shipping'
+    Tom's HW:      'Save $180 on this RTX 5070 Ti, now $1,199 (was $1,379)'
+    Use the last amount >= $200, skipping savings and old prices ('save $X', 'was $X', '$X off')."""
+    amounts = []
+    for m in re.finditer(r"\$\s?([\d,]+(?:\.\d{1,2})?)", title):
+        before = title[max(0, m.start() - 12):m.start()].lower()
+        after = title[m.end():m.end() + 5].lower()
+        if re.search(r"(save|saving|was|list|reg\.?|regularly|msrp|from)\s*$", before) or re.match(r"\s*off\b", after):
+            continue
+        amounts.append(float(m.group(1).replace(",", "")))
     amounts = [a for a in amounts if a >= 200]
     return amounts[-1] if amounts else None
 
@@ -179,20 +188,39 @@ def reddit_posts() -> list[dict]:
     raise RuntimeError("all public Reddit endpoints failed: " + " | ".join(errors))
 
 
-def slickdeals_items() -> list[dict]:
+def rss_items(source: str, url: str) -> list[dict]:
+    root = ET.fromstring(http(url))
     out = []
-    for q in ("rtx 5070 ti", "rtx 5070", "rtx 5080", "rtx 5090"):
-        url = ("https://slickdeals.net/newsearch.php?mode=frontpage&searcharea=deals&searchin=first&rss=1&q="
-               + urllib.parse.quote(q))
-        root = ET.fromstring(http(url))
-        for it in root.iter("item"):
-            link = it.findtext("link") or ""
-            out.append({"id": "slickdeals:" + link.split("?")[0], "title": html.unescape(it.findtext("title") or ""),
-                        "url": link, "thread": link, "expired": False})
+    for it in root.iter("item"):
+        link = (it.findtext("link") or "").strip()
+        guid = (it.findtext("guid") or link).strip()
+        title = html.unescape((it.findtext("title") or "").strip())
+        out.append({"id": f"{source}:{guid.split('?')[0]}", "title": title,
+                    "url": link, "thread": link, "expired": False})
     return out
 
 
-SOURCES = {"reddit": reddit_posts, "slickdeals": slickdeals_items}
+def slickdeals_items() -> list[dict]:
+    out = []
+    for q in ("rtx 5070 ti", "rtx 5070", "rtx 5080", "rtx 5090"):
+        out += rss_items("slickdeals", "https://slickdeals.net/newsearch.php?mode=frontpage&searcharea=deals"
+                                       "&searchin=first&rss=1&q=" + urllib.parse.quote(q))
+    return out
+
+
+def tomshardware_items() -> list[dict]:
+    # Editorial deal posts, e.g. "This MSI RTX 5070 Ti hits a new low price of $729"
+    return rss_items("tomshardware", "https://www.tomshardware.com/feeds/articletype/deals")
+
+
+def dealnews_items() -> list[dict]:
+    # "X for $Y + free shipping" style titles; all-deals feed plus the Computers category.
+    return (rss_items("dealnews", "https://www.dealnews.com/?rss=1")
+            + rss_items("dealnews", "https://www.dealnews.com/c39/Computers/?rss=1"))
+
+
+SOURCES = {"reddit": reddit_posts, "slickdeals": slickdeals_items,
+           "tomshardware": tomshardware_items, "dealnews": dealnews_items}
 
 
 # ------------------------------------------------------------ notify/state ---
@@ -244,7 +272,9 @@ def save_state(s: dict):
 def main(dry=False):
     state = load_state()
     now = time.time()
-    first_run = not state["seen"]
+    seeded = set(state.setdefault("seeded", []))
+    if state["seen"] and not seeded:  # state from before per-source seeding existed
+        seeded = {"slickdeals"}  # the only source that had succeeded before
     alerts = 0
     for name, fn in SOURCES.items():
         try:
@@ -269,7 +299,7 @@ def main(dry=False):
             ok, why, info = evaluate(it["title"], parse_price(it["title"]))
             if not ok:
                 continue
-            if first_run:
+            if name not in seeded:
                 continue  # seed the de-dupe list on first run instead of spamming old posts
             length = f"~{info['length']}mm" if info["length"] else "length unknown - verify <350mm"
             tax = f" (~${info['total']:,.0f} w/ tax)" if TAX_RATE else ""
@@ -277,6 +307,8 @@ def main(dry=False):
                    f"{it['title']}\n{length} | via {name}\nThread: {it['thread']}",
                    it["url"], dry=dry)
             alerts += 1
+        seeded.add(name)  # after the first successful fetch, new items alert normally
+    state["seeded"] = sorted(seeded)
     save_state(state)
     print(f"done: {alerts} alert(s)")
 
@@ -296,6 +328,13 @@ def self_test():
         ("[GPU] Zotac RTX 5070 Twin Edge ($749.99)", True),
         ("[Laptop] MSI Vector RTX 5080 ($1,499)", False),
         ("[GPU] RTX 5090 Founders Edition ($1,999)", False),                      # over budget
+        # DealNews / Tom's Hardware title formats
+        ("Gigabyte GeForce RTX 5070 Ti Windforce 16GB Graphics Card for $1,149 + free shipping", True),
+        ("Open-Box MSI RTX 5080 Ventus 3X for $1,099 + free shipping", False),     # open box
+        ("Save $180 on this MSI RTX 5070 Ti Shadow 3X, now $1,199 (was $1,379)", True),
+        ("This RTX 5080 is $200 off at Newegg, now $1,999", False),               # over budget
+        ("RTX 5070 Ti gaming laptop drops to $1,299 at Walmart", False),          # laptop
+        ("Save $1440 on this 4K gaming rig with an RTX 5070 Ti", False),          # rig/no price
     ]
     bad = 0
     for title, want in cases:

@@ -1,6 +1,6 @@
 # GPU deal watcher (through Cyber Monday)
 
-Every 10 minutes it checks r/buildapcsales and Slickdeals.
+Every 10 minutes it checks Slickdeals, DealNews, Tom's Hardware's deals feed, and r/buildapcsales (when Reddit API keys are set).
 It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
 It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone via a Discord webhook and/or ntfy.
 
@@ -58,6 +58,9 @@ Always check the spec sheet. Unknown models still alert, marked "length unknown"
 | Walmart | Blocks bots (PerimeterX) | Covered by Slickdeals |
 | Micro Center | No API, in-store pricing | Check the weekly ad and the Black Friday page manually on Nov 26–27 |
 | B&H | Blocks bots | Covered by Slickdeals |
+| Tom's Hardware, DealNews | Work (RSS); a newly added source records its existing posts first, so you only get new deals |
+| Neowin, Ben's Bargains, Newegg RSS | Block GitHub's servers (403) or are mostly news | Not used |
+| Nvidia Founders Edition stock API | Responds, but US product codes couldn't be confirmed | Not used; check nvidia.com/Best Buy for FE drops |
 | Slickdeals | Works (search RSS) | The Slickdeals app's "Deal Alerts" for "RTX 5070 Ti" and "RTX 5080" is a zero-code backup |
 
 `python watcher.py --self-test` runs the filter tests.
