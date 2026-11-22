@@ -20,6 +20,7 @@ It skips laptops and prebuilts, de-duplicates, and pushes alerts to your phone v
      Create a "script" app at https://www.reddit.com/prefs/apps.
      Without them, the watcher falls back to Reddit's public RSS, which Reddit often blocks from GitHub's servers.
      Reddit may also require you to request API access first; if it does, use the Slickdeals fallbacks below.
+   - `REDDIT_USERNAME` (optional, e.g. `yourname` without `/u/`). Reddit's API rules ask for it in the User-Agent; it's only sent to Reddit.
    - `BESTBUY_API_KEY` (optional, free at https://developer.bestbuy.com, approval can take about a day)
    - `TAX_RATE` (optional **secret**, e.g. `0.0825`) so the ceilings include sales tax. Use a secret, not a variable: variable values show up in public run logs.
 4. Go to Actions → gpu-deal-watcher → **Run workflow** once.

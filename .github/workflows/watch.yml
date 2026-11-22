@@ -24,6 +24,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           BESTBUY_API_KEY: ${{ secrets.BESTBUY_API_KEY }}
           TAX_RATE: ${{ secrets.TAX_RATE || '0' }}   # secret, so the value stays masked in public logs
         run: python watcher.py

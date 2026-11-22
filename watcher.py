@@ -34,6 +34,10 @@ TAX_RATE = float(os.environ.get("TAX_RATE", "0"))      # e.g. 0.0825 -> ceilings
 MAX_LENGTH_MM = int(os.environ.get("MAX_LENGTH_MM", "350"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 USER_AGENT = "script:gpu-deal-watcher:v1.0 (personal use)"
+# Reddit's API rules ask for "(by /u/<username>)" in the User-Agent. Read from a
+# secret so the username isn't in the code, and sent only to Reddit.
+_reddit_user = os.environ.get("REDDIT_USERNAME", "").strip().removeprefix("/u/").removeprefix("u/")
+REDDIT_UA = f"script:gpu-deal-watcher:v1.0 (by /u/{_reddit_user})" if _reddit_user else USER_AGENT
 
 # Alert ceilings (pre-tax card price, USD). Default top ceiling is $1,500. Lower
 # ceilings on cheaper cards are "worth interrupting me" thresholds: e.g. the
@@ -123,14 +127,15 @@ def evaluate(title: str, price: float | None, length_mm: int | None = None) -> t
 
 # --------------------------------------------------------------- sources ---
 def reddit_posts() -> list[dict]:
+    ua = {"User-Agent": REDDIT_UA}
     cid, secret = os.environ.get("REDDIT_CLIENT_ID"), os.environ.get("REDDIT_CLIENT_SECRET")
     if cid and secret:
         auth = base64.b64encode(f"{cid}:{secret}".encode()).decode()
         tok = json.loads(http("https://www.reddit.com/api/v1/access_token",
                               data=b"grant_type=client_credentials",
-                              headers={"Authorization": f"Basic {auth}"}))["access_token"]
+                              headers={**ua, "Authorization": f"Basic {auth}"}))["access_token"]
         raw = json.loads(http("https://oauth.reddit.com/r/buildapcsales/new?limit=100&raw_json=1",
-                              headers={"Authorization": f"bearer {tok}"}))
+                              headers={**ua, "Authorization": f"bearer {tok}"}))
         out = []
         for ch in raw["data"]["children"]:
             d = ch["data"]
@@ -140,7 +145,7 @@ def reddit_posts() -> list[dict]:
                         "expired": d.get("link_flair_text", "") and "expired" in d.get("link_flair_text", "").lower()})
         return out
     # Unauthenticated fallback: RSS. Reddit often 403s cloud/datacenter IPs here.
-    root = ET.fromstring(http("https://www.reddit.com/r/buildapcsales/new/.rss?limit=100"))
+    root = ET.fromstring(http("https://www.reddit.com/r/buildapcsales/new/.rss?limit=100", headers=ua))
     ns = {"a": "http://www.w3.org/2005/Atom"}
     out = []
     for e in root.findall("a:entry", ns):
