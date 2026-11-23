@@ -1,7 +1,7 @@
 # GPU deal watcher (through Cyber Monday)
 
 Every 10 minutes it checks Slickdeals, DealNews, Tom's Hardware's deals feed, and r/buildapcsales (when Reddit API keys are set).
-It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
+It keeps only new (not used or open-box) Nvidia cards with at least 16 GB of VRAM (RTX 5070 Ti, 5080, 5090, and new-stock 4080 Super; the 12 GB RTX 5070 is not tracked) that are under the price ceiling and under 350 mm long.
 It skips laptops and prebuilts, de-duplicates, adds price context (vs. the week's lowest price seen), flags in-store-only deals, marks exceptional deals 🔥 with an @mention, posts a daily 📊 summary, and pushes alerts to your phone via a Discord webhook and/or ntfy.
 
 ## Setup (about 15 minutes)
@@ -45,8 +45,7 @@ That way you know the watcher has a blind spot instead of assuming it's quiet.
 | `MAX_5090` | 1500 | effectively never fires; kept in case of a pricing error |
 | `MAX_4080S` | 1200 | only if new old stock shows up |
 | `MAX_5070TI` | 1300 | it's at ~$1,340-1,480 now; $1,300 or less is a real drop |
-| `MAX_5070` | 800 | above this, a 5070 Ti is the better buy |
-| `HOT_5070TI` / `HOT_5080` / `HOT_5070` / `HOT_4080S` / `HOT_5090` | 1150 / 1400 / 600 / 1000 / 1500 | listed price (pre-tax) at or below which an alert is 🔥 and @mentions you |
+| `HOT_5070TI` / `HOT_5080` / `HOT_4080S` / `HOT_5090` | 1150 / 1400 / 1000 / 1500 | listed price (pre-tax) at or below which an alert is 🔥 and @mentions you |
 | `DIGEST_HOUR_UTC` (variable) | 1 | hour for the daily 📊 summary (1 UTC = 8 PM US Eastern) |
 | `MAX_AGE_DAYS` | 3 | skip posts older than this; old deals are usually expired |
 | `MAX_LENGTH_MM` | 350 | max card length to alert on; set to your case clearance |

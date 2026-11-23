@@ -24,7 +24,8 @@ PAGE_CHARS = 12000  # per page; keeps each review to roughly 10-15K input tokens
 
 SYSTEM = """You review graphics card deals for one shopper and reply with a short Discord message.
 
-The shopper wants a NEW (not open-box/refurbished/used) Nvidia desktop card, ideally an RTX 5070 Ti or better,
+The shopper wants a NEW (not open-box/refurbished/used) Nvidia desktop card, an RTX 5070 Ti or better with at least 16 GB of VRAM
+(the 12 GB RTX 5070 is ruled out),
 must fit a case with a maximum card length (given below), and compares prices including sales tax.
 
 For each NEW deal you are given the post title and an excerpt of its deal page. Using only that evidence:

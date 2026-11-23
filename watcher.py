@@ -59,8 +59,7 @@ CARDS = {
                     "hot": float(os.environ.get("HOT_4080S", 1000))},
     "RTX 5070 Ti": {"pattern": r"5070\s*-?\s*ti\b", "max": float(os.environ.get("MAX_5070TI", 1300)),
                     "hot": float(os.environ.get("HOT_5070TI", 1150))},
-    "RTX 5070":    {"pattern": r"5070(?!\s*-?\s*ti)\b", "max": float(os.environ.get("MAX_5070", 800)),
-                    "hot": float(os.environ.get("HOT_5070", 600))},
+    # The plain RTX 5070 (12 GB) is deliberately not tracked: every card here has 16 GB+ of VRAM.
 }
 # Deals you can only get at a store, or only some stores.
 IN_STORE = re.compile(r"in[\s-]?store|store pick[\s-]?up|pick[\s-]?up only|select (stores|locations)|"
@@ -239,7 +238,7 @@ def rss_items(source: str, url: str) -> list[dict]:
 
 def slickdeals_items() -> list[dict]:
     out = []
-    for q in ("rtx 5070 ti", "rtx 5070", "rtx 5080", "rtx 5090"):
+    for q in ("rtx 5070 ti", "rtx 5080", "rtx 5090"):
         out += rss_items("slickdeals", "https://slickdeals.net/newsearch.php?mode=frontpage&searcharea=deals"
                                        "&searchin=first&rss=1&q=" + urllib.parse.quote(q))
     return out
@@ -530,8 +529,8 @@ def self_test():
         ("[GPU] Gigabyte RTX 5070 Ti Gaming OC - Open Box ($999)", False),        # open box
         ("[Prebuilt] iBuyPower Ryzen 7 RTX 5080 ($1,499)", False),                # prebuilt
         ("[GPU] PowerColor Hellhound RX 9070 XT ($649.99)", False),               # AMD
-        ("[GPU] MSI Ventus 2X RTX 5070 ($839.99)", False),                        # over $800
-        ("[GPU] Zotac RTX 5070 Twin Edge ($749.99)", True),
+        ("[GPU] Zotac RTX 5070 Twin Edge ($749.99)", False),                      # 12 GB 5070: not tracked
+        ("[GPU] MSI RTX 5070 Ti Ventus 3X ($1,199.99)", True),
         ("[Laptop] MSI Vector RTX 5080 ($1,499)", False),
         ("[GPU] RTX 5090 Founders Edition ($1,999)", False),                      # over budget
         # DealNews / Tom's Hardware title formats
