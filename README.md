@@ -1,6 +1,6 @@
 # GPU deal watcher (through Cyber Monday)
 
-Every 10 minutes it checks Slickdeals, DealNews, Tom's Hardware's deals feed, and r/buildapcsales (when Reddit API keys are set).
+Every 10 minutes (see "Run it every 10 minutes from your desktop") it checks Slickdeals, DealNews, Tom's Hardware's deals feed, and r/buildapcsales (when Reddit API keys are set).
 It keeps only new (not used or open-box) Nvidia cards (RTX 5070, 5070 Ti, 5080, 5090, and new-stock 4080 Super) that are under the price ceiling and under 350 mm long.
 It skips laptops and prebuilts, de-duplicates, adds price context (vs. the week's lowest price seen), flags in-store-only deals, marks exceptional deals 🔥 with an @mention, posts a daily 📊 summary, and pushes alerts to your phone via a Discord webhook and/or ntfy.
 
@@ -36,6 +36,34 @@ It skips laptops and prebuilts, de-duplicates, adds price context (vs. the week'
 
 If a source fails 3 runs in a row, you get one warning push per day.
 That way you know the watcher has a blind spot instead of assuming it's quiet.
+
+## Run it every 10 minutes from your desktop
+
+GitHub's scheduler often runs this workflow only every few hours, not every 10 minutes.
+`scripts/trigger_watch.py` asks GitHub to start a run, and your desktop's scheduler runs the script every 10 minutes.
+The watcher still runs on GitHub with the same secrets and de-dupe state; your computer only sends the "run now" request.
+The GitHub schedule stays on as a backup for when your computer is off or asleep.
+
+1. **Token:** GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token.
+   Repository access: *Only select repositories* → this repo. Permissions: **Actions: Read and write** (nothing else).
+   Pick an expiry date after Cyber Monday.
+2. **Save it** as the first line of `~/.gpu-deal-watcher-token`
+   (Windows: `C:\Users\<you>\.gpu-deal-watcher-token`), or set it in the `GPU_WATCHER_TOKEN` environment variable.
+   Treat it like a password and never commit it.
+3. **Test:** `python scripts/trigger_watch.py` should print `triggered (HTTP 204)`, and a new run should appear in the Actions tab.
+4. **Schedule it** (requires Python 3; use full paths):
+   - **Windows** (Command Prompt):
+     `schtasks /Create /SC MINUTE /MO 10 /TN gpu-deal-watcher /TR "pythonw C:\path\to\scripts\trigger_watch.py"`
+     (`pythonw` runs it without opening a console window.)
+     Remove it with `schtasks /Delete /TN gpu-deal-watcher /F`.
+   - **macOS / Linux:** run `crontab -e` and add
+     `*/10 * * * * /usr/bin/python3 /path/to/scripts/trigger_watch.py >> ~/gpu-watcher-trigger.log 2>&1`
+     On macOS, cron can't read files inside Desktop, Documents or Downloads, so keep the script somewhere else.
+     Alternatively, give `/usr/sbin/cron` Full Disk Access.
+   - **Any OS, no scheduler:** `python scripts/trigger_watch.py --loop` triggers every 10 minutes while the window stays open.
+
+The script skips a trigger when a run is already queued or running, so runs don't pile up.
+After `PURCHASED` disables the workflow, triggers fail harmlessly. Remove the scheduled task then, or after Nov 30.
 
 ## Tuning
 
